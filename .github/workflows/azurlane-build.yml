@@ -1,138 +1,139 @@
 name: APK AzurLane JMBQ Build Work
+# 手动触发，配置B服默认参数，无需手动输入
 on:
   workflow_dispatch:
     inputs:
       server_name:
-        description: '区服名称-必须（必须是英文字母！例如 Bilibili，台服和外服请使用XAPK构建流程）'
+        description: '区服名称-必须（英文字母！示例：Bilibili）'
         required: true
         type: string
-        default: 'Bilibili' # 默认为B服，无需手动输入
+        default: 'Bilibili'  # B服默认值，直接用
       download_url:
-        description: 'APK下载链接（只能填入直链，最好使用国外云盘的直链，例如Google云盘）'
+        description: 'APK直链（国外云盘优先，如Google Drive）'
         required: true
         type: string
-        default: 'https://drive.google.com/uc?export=download&id=1UCXwbDVx1HVoslmZaShPtWNYSMiUe62z' # 默认为你B服的Google Drive直链
+        default: 'https://drive.google.com/uc?export=download&id=1UCXwbDVx1HVoslmZaShPtWNYSMiUe62z'  # 你的B服直链
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    # 必备权限：创建Release、上传资产、读取环境
     permissions:
-      contents: write # 赋予创建Release/写入仓库的权限
-      actions: read    # 新增：读取Action环境信息
-    # 定义缺失的核心环境变量（可根据需要修改版本号）
+      contents: write
+      actions: read
+    # 修复核心：合并版本变量，同一env块无内部引用，解决语法报错
     env:
-      JMBQ_VERSION: 9.6.11 # 碧蓝航线当前版本号（B服9.6.11）
-      VERSION: ${{ env.JMBQ_VERSION }} # 关联版本号，保持一致
-      APK_NAME: azurlane-${{ github.event.inputs.server_name }}.apk # 下载的APK命名
-      7Z_NAME: ${{ github.event.inputs.server_name }}-V.${{ env.VERSION }}.7z # 分卷压缩包基础名
+      APP_VERSION: 9.6.11        # 碧蓝航线B服当前版本号
+      APK_NAME: azurlane-${{ github.event.inputs.server_name }}.apk  # 下载的APK命名
+      7Z_NAME: ${{ github.event.inputs.server_name }}-V.${{ env.APP_VERSION }}.7z  # 7z分卷基础名
 
     steps:
-      # 步骤1：检出仓库代码（拉取merge_build.sh等核心脚本）
+      # 步骤1：浅克隆仓库代码（提升速度，拉取merge_build.sh）
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1 # 浅克隆，提升速度
+          fetch-depth: 1
 
-      # 步骤2：安装Ubuntu基础依赖（7z/解压/网络工具，解决压缩/SDK安装问题）
-      - name: Install Ubuntu basic dependencies
+      # 步骤2：安装Ubuntu基础依赖（7z压缩/SDK解压/网络工具，必装）
+      - name: Install Ubuntu Basic Dependencies
         run: |
           sudo apt update -y && sudo apt install -y p7zip-full p7zip-rar unzip curl wget jq -y
-          # 验证7z安装
-          7z --version
-          # 验证curl安装
-          curl --version
+          # 验证关键工具安装
+          echo "7z版本：" && 7z --version
+          echo "curl版本：" && curl --version
 
-      # 步骤3：设置Java JDK 17（Android构建必需）
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4 # 升级到v4，更稳定
+      # 步骤3：配置Java 17（Android构建必需，稳定版temurin）
+      - name: Setup Java JDK 17
+        uses: actions/setup-java@v4
         with:
           java-version: "17"
-          distribution: "temurin" # 替换adopt为temurin（官方维护，更稳定）
-          cache: gradle # 缓存gradle，提升后续构建速度
+          distribution: "temurin"
+          cache: gradle  # 缓存gradle，后续构建更快
 
-      # 步骤4：设置Android SDK（升级到v4，适配新版）
+      # 步骤4：配置Android SDK+Build-Tools 35.0.0（APK处理必需）
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          android-sdk-version: 35 # 匹配build-tools版本
-          build-tools-version: 35.0.0 # 直接指定，无需手动安装
+          android-sdk-version: 35
+          build-tools-version: 35.0.0
 
-      # 步骤5：手动下载APK并做【完整性初步校验】（解决APK损坏问题）
-      - name: Download APK from direct link and check integrity
+      # 步骤5：下载APK+完整性校验（解决文件损坏，过滤残缺/空文件）
+      - name: Download APK & Check Integrity
         run: |
-          # 用wget下载APK（支持Google Drive直链，自动处理重定向）
+          # 用wget下载，兼容Google Drive直链，忽略证书问题
           wget -O ${{ env.APK_NAME }} ${{ github.event.inputs.download_url }} --no-check-certificate
-          # 校验1：检查APK文件是否存在
+          # 校验1：文件是否存在
           if [ ! -f ${{ env.APK_NAME }} ]; then
-            echo "ERROR: APK文件下载失败，直链无效或文件不存在！"
-            exit 1 # 终止工作流
+            echo "❌ 错误：APK下载失败，直链无效/文件不存在"
+            exit 1
           fi
-          # 校验2：检查APK文件大小（碧蓝航线APK最小1.4G，过滤空文件/残缺文件）
+          # 校验2：文件大小（碧蓝航线APK最小1.4G，过滤残缺文件）
           APK_SIZE=$(du -b ${{ env.APK_NAME }} | awk '{print $1}')
-          MIN_SIZE=$((1400 * 1024 * 1024)) # 1.4G字节数
+          MIN_SIZE=$((1400 * 1024 * 1024))
           if [ $APK_SIZE -lt $MIN_SIZE ]; then
-            echo "ERROR: APK文件残缺，大小为$((APK_SIZE/1024/1024))M，小于最小1400M！"
-            exit 1 # 终止工作流
+            echo "❌ 错误：APK残缺，当前大小$((APK_SIZE/1024/1024))M，需至少1400M"
+            exit 1
           fi
-          echo "APK下载成功，文件大小：$((APK_SIZE/1024/1024))M，完整性初步校验通过！"
+          echo "✅ APK下载成功，大小：$((APK_SIZE/1024/1024))M，完整性校验通过"
 
-      # 步骤6：执行构建流程（赋予脚本权限+执行+捕获错误）
-      - name: Build APK with custom script
+      # 步骤6：执行核心构建脚本（检查脚本存在+赋权+执行，捕获错误）
+      - name: Build APK with Custom Script
         run: |
-          # 确保构建脚本存在
+          # 检查merge_build.sh是否存在（仓库根目录必须有）
           if [ ! -f merge_build.sh ]; then
-            echo "ERROR: 核心构建脚本merge_build.sh不存在！请检查仓库是否包含该文件！"
+            echo "❌ 错误：核心脚本merge_build.sh不存在，请检查仓库根目录"
             exit 1
           fi
-          # 赋予执行权限
           chmod +x merge_build.sh
-          # 执行脚本并传入参数（区服名+APK路径，替代原直链，更灵活）
+          # 传入参数：区服名 + 下载的APK路径
           ./merge_build.sh "${{ github.event.inputs.server_name }}" "${{ env.APK_NAME }}"
-        continue-on-error: false # 脚本执行失败直接终止，不继续
+        continue-on-error: false  # 脚本失败直接终止，不继续后续步骤
 
-      # 步骤7：分卷压缩构建后的APK（按2G分卷，适配GitHub Release单文件2G限制）
-      - name: Split compress APK to 7z parts
+      # 步骤7：7z分卷压缩（2000M/卷，适配GitHub Release单文件2G限制）
+      - name: Split Compress APK to 7z Parts
         run: |
-          # 7z分卷压缩：每卷2000M（2G），格式7z.001/7z.002...，保留原文件
+          # 分卷压缩：-v2000M=每卷2G，-a=添加压缩，保留原APK
           7z a -v2000M ${{ env.7Z_NAME }} *.apk
-          # 查看压缩后的分卷文件
+          # 查看压缩文件，验证是否生成
           ls -lh ${{ env.7Z_NAME }}.*
-          # 校验分卷文件是否存在
+          # 校验主分卷（001）是否存在
           if [ ! -f ${{ env.7Z_NAME }}.001 ]; then
-            echo "ERROR: 7z分卷压缩失败，未生成001主文件！"
+            echo "❌ 错误：7z分卷压缩失败，未生成001主文件"
             exit 1
           fi
+          echo "✅ 7z分卷压缩成功，产物：$(ls ${{ env.7Z_NAME }}.* | wc -l) 个文件"
 
-      # 步骤8：创建 Release 并上传所有分卷文件（优化参数，更稳定）
-      - name: Release and Upload Assets
-        uses: ncipollo/release-action@v1.14.0 # 指定版本，避免自动升级出问题
+      # 步骤8：自动创建Release并上传所有分卷（带区服标识，支持更新）
+      - name: Release & Upload All Assets
+        uses: ncipollo/release-action@v1.14.0  # 固定版本，避免兼容问题
         with:
-          tag: "${{ env.JMBQ_VERSION }}-APK-${{ github.event.inputs.server_name }}" # 标签增加区服名，支持多服同时发布
-          name: "AzurLane JMBQ ${{ env.JMBQ_VERSION }} [${{ github.event.inputs.server_name }}] Build APK" # 名称增加区服名
-          artifacts: "${{ env.7Z_NAME }}.*" # 精准匹配分卷文件，避免上传无关文件
-          allowUpdates: true # 允许更新已有Release
-          removeArtifacts: true # 新增：更新Release时删除旧资产
-          draft: false # 直接发布正式Release，无需手动确认
-          prerelease: false # 非预发布版本
+          tag: ${{ env.APP_VERSION }}-APK-${{ github.event.inputs.server_name }}
+          name: AzurLane JMBQ ${{ env.APP_VERSION }} [${{ github.event.inputs.server_name }}] Build APK
+          artifacts: ${{ env.7Z_NAME }}.*  # 仅上传7z分卷，精准匹配
+          allowUpdates: true              # 允许更新已有Release
+          removeArtifacts: true           # 更新时删除旧资产，避免重复
+          draft: false                    # 直接发布正式版，无需手动确认
+          prerelease: false               # 非预发布版本
           body: |
-            ### 📌 区服版本
+            ### 📌 构建信息
             服务器：${{ github.event.inputs.server_name }}
-            游戏版本：${{ env.JMBQ_VERSION }}
+            游戏版本：${{ env.APP_VERSION }}
             APK直链来源：${{ github.event.inputs.download_url }}
+            构建时间：${{ github.run_at }}
 
             <details>
-              <summary>📝 中文安装说明 - 点击展开</summary>
-                1. 下载下方<b>所有</b>以${{ env.7Z_NAME }}为前缀的7z分卷文件（001/002/...）；
-                2. 将所有分卷放在<b>同一文件夹</b>，右键选择「7z→解压到当前文件夹」（仅需点击001文件）；
-                3. 解压后找到APK文件，直接安装（安卓8.0+需开启「未知来源安装」）；
-                4. 若安装失败，检查APK完整性或更换解压工具。
+              <summary>📝 中文安装说明（点击展开）</summary>
+                1. 下载下方<b>所有</b>以${{ env.7Z_NAME }}为前缀的7z分卷文件；
+                2. 将所有分卷放在<b>同一文件夹</b>，右键001文件选择「7z→解压到当前文件夹」；
+                3. 解压后找到APK文件，安卓8.0+需开启「未知来源安装」后直接安装；
+                4. 安装失败请检查：分卷是否齐全/APK是否残缺/解压工具是否为7z。
             </details>
             
             <details>
-              <summary>📝 English Installation Instructions - Click to expand</summary>
-                1. Download <b>all</b> 7z split files (001/002/...) prefixed with ${{ env.7Z_NAME }} below;
-                2. Place all split files in the <b>same folder</b>, right-click and select 「7z→Extract Here」(only need to click the 001 file);
-                3. Find the APK file after extraction and install it directly (Android 8.0+ needs to enable 「Install from unknown sources」);
-                4. If installation fails, check the APK integrity or replace the decompression tool.
+              <summary>📝 English Installation Instructions（Click to expand）</summary>
+                1. Download <b>all</b> 7z split files prefixed with ${{ env.7Z_NAME }} below;
+                2. Place all split files in the <b>same folder</b>, right-click the 001 file and select 「7z→Extract Here」;
+                3. Find the APK file after extraction, enable 「Install from unknown sources」 (Android 8.0+) and install directly;
+                4. If installation fails, check: complete split files / intact APK / 7z decompression tool.
             </details>
-          token: ${{ github.token }} # 自动使用GitHub内置令牌，无需手动配置
+          token: ${{ github.token }}  # GitHub内置令牌，无需手动配置
