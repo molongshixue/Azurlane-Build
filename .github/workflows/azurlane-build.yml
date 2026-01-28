@@ -1,87 +1,74 @@
 name: APK AzurLane JMBQ Build Work
-# 手动触发，B服默认配置
 on:
   workflow_dispatch:
     inputs:
       server_name:
-        description: '区服名称-必须（英文字母！示例：Bilibili）'
+        description: '区服名称-必须（必须是英文字母！例如 Bilibili，台服和外服请使用XAPK AzurLane JMBQ Build Work）'
         required: true
         type: string
-        default: 'Bilibili'
+        default: ''
       download_url:
-        description: 'APK直链（国外云盘优先，如Google Drive）'
+        description: 'APK下载链接（只能填入直链，最好使用国外云盘的直链，例如Google云盘）'
         required: true
         type: string
-        default: 'https://drive.google.com/uc?export=download&id=1UCXwbDVx1HVoslmZaShPtWNYSMiUe62z'
+        default: ''
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # 权限配置
     permissions:
       contents: write
-      actions: read
-    # 修复核心：env块内不引用自身变量，变量名加引号
+    # 仅新增这一块：定义缺失的环境变量，解决Unrecognized named-value错误
     env:
-      APP_VERSION: "9.6.11"  # 固定版本号，不被引用
-      APK_NAME: "azurlane-${{ github.event.inputs.server_name }}.apk"
-      7Z_NAME: "${{ github.event.inputs.server_name }}-V.9.6.11.7z"  # 直接写版本号，不引用env
+      JMBQ_VERSION: "9.6.11"  # 碧蓝航线B服当前版本号，可按需修改
+      VERSION: "9.6.11"       # 与上保持一致，匹配原始脚本的版本引用
 
     steps:
-      # 步骤1：浅克隆仓库
+      # 步骤1：检出仓库代码
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      # 步骤2：安装基础依赖
-      - name: Install Dependencies
-        run: |
-          sudo apt update -y && sudo apt install -y p7zip-full unzip curl wget -y
-
-      # 步骤3：配置Java 17
+      
+      # 步骤2：设置 Java JDK（保留原始版本和配置）
       - name: Setup Java JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v3.3.0
         with:
           java-version: "17"
-          distribution: "temurin"
+          distribution: "adopt"
 
-      # 步骤4：配置Android SDK
+      # 步骤3：设置 Android SDK（保留原始版本）
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          android-sdk-version: 35
-          build-tools-version: 35.0.0
+        uses: android-actions/setup-android@v3
 
-      # 步骤5：下载APK+校验
-      - name: Download & Check APK
+      # 步骤4：安装 build-tools（保留原始命令）
+      - name: Install build-tools
         run: |
-          wget -O ${{ env.APK_NAME }} ${{ github.event.inputs.download_url }} --no-check-certificate
-          if [ ! -f ${{ env.APK_NAME }} ]; then exit 1; fi
-          APK_SIZE=$(du -b ${{ env.APK_NAME }} | awk '{print $1}')
-          if [ $APK_SIZE -lt $((1400 * 1024 * 1024)) ]; then exit 1; fi
-
-      # 步骤6：执行构建脚本
+          yes | sdkmanager --install "build-tools;35.0.0"
+      
+      # 步骤5：执行构建流程（保留原始传参方式，不修改）
       - name: Build APK
         run: |
           chmod +x merge_build.sh
-          ./merge_build.sh "${{ github.event.inputs.server_name }}" "${{ env.APK_NAME }}"
+          ./merge_build.sh "${{ github.event.inputs.server_name }}" "${{ github.event.inputs.download_url }}"
 
-      # 步骤7：7z分卷压缩
-      - name: Compress to 7z Parts
-        run: |
-          7z a -v2000M ${{ env.7Z_NAME }} *.apk
-          if [ ! -f ${{ env.7Z_NAME }}.001 ]; then exit 1; fi
-
-      # 步骤8：创建Release
-      - name: Release Assets
-        uses: ncipollo/release-action@v1.14.0
+      # 步骤6：创建 Release 并上传所有分卷文件（仅变量已定义，其余完全保留）
+      - name: Release and Upload Assets
+        uses: ncipollo/release-action@v1
         with:
-          tag: "9.6.11-APK-${{ github.event.inputs.server_name }}"
-          name: "AzurLane JMBQ 9.6.11 [${{ github.event.inputs.server_name }}] Build"
-          artifacts: "${{ env.7Z_NAME }}.*"
+          tag: "${{ env.JMBQ_VERSION }}-APK"
+          name: "AzurLane JMBQ ${{ env.JMBQ_VERSION }} Build APK"
+          artifacts: "${{ github.event.inputs.server_name }}-V.${{ env.VERSION }}.7z.*"
           allowUpdates: true
           body: |
-            ### 区服：${{ github.event.inputs.server_name }}
-            ### 版本：9.6.11
-          token: ${{ github.token }}
+            <details>
+              <summary>中文安装说明 - 点击展开</summary>
+                1. 在下方列表中找到你需要的版本前缀，下载该服务器名称前缀的所有以 7z.00* 结尾的文件</br>
+                2. 解压时只需要选择"XXX.7z.001"解压即可</br>
+                3. 在解压后的文件夹中找到apk文件并安装
+            </details>
+            
+            <details>
+              <summary>English Installation Instructions - Click to expand</summary>
+                1. Find the version prefix you need in the list below, and download all files ending with 7z.00* that have that server name prefix</br>
+                2. When extracting, simply select the "XXX.7z.001" file to decompress</br>
+                3. Find the APK file in the extracted folder and install it
+            </details>
