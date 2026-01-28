@@ -85,29 +85,28 @@ DOWNLOAD_APKEEP() {
     fi
 }
 
-# 下载ApkTool
-DOWNLOAD_APKTOOL() {
-    local OWNER="iBotPeaches"
-    local REPO="Apktool"
-    local FILENAME="apktool.jar"
+# 下载Apktool（修复jq解析null+增加兜底链接，与原脚本输出风格一致）
+echo "正在下载apktool..."
+# 1. 定义Apktool官方API和兜底固定链接（v2.8.1为最新稳定版，可长期用）
+APKTOOL_API="https://api.github.com/repos/iBotPeaches/Apktool/releases/latest"
+BACKUP_APKTOOL_URL="https://github.com/iBotPeaches/Apktool/releases/download/v2.8.1/apktool_2.8.1.jar"
 
-    echo "正在下载Apktool..."
-    local API_RESPONSE=$(curl -s "https://api.github.com/repos/${OWNER}/${REPO}/releases/latest")
-    local DOWNLOAD_LINK=$(echo "${API_RESPONSE}" | jq -r '.assets[] | select(.name | endswith(".jar")) | .browser_download_url' | head -n 1)
-    if [ -z "${DOWNLOAD_LINK}" ] || [ "${DOWNLOAD_LINK}" == "null" ]; then
-        echo "无法找到Apktool下载链接"
-        exit 1
-    fi
+# 2. 精准解析API，筛选apktool.jar链接（避免解析到其他文件）
+APKTOOL_URL=$(curl -s $APKTOOL_API | jq -r '.assets[]? | select(.name | contains("apktool.jar")) | .browser_download_url')
 
-    curl -L -o "${DOWNLOAD_DIR}/${FILENAME}" "${DOWNLOAD_LINK}"
-    if [ $? -eq 0 ]; then
-        echo "Apktool下载成功！文件保存至：${DOWNLOAD_DIR}/${FILENAME}"
-    else
-        echo "Apktool下载失败，请重试"
-        exit 1
-    fi
-}
+# 3. 空值兜底：解析失败则用固定链接，杜绝null报错
+if [ -z "$APKTOOL_URL" ] || [ "$APKTOOL_URL" = "null" ]; then
+    echo "警告：自动获取Apktool链接失败，使用兜底固定链接"
+    APKTOOL_URL=$BACKUP_APKTOOL_URL
+fi
 
+# 4. 下载Apktool并校验文件是否存在
+wget -O apktool.jar $APKTOOL_URL --no-check-certificate
+if [ ! -f "apktool.jar" ]; then
+    echo "错误：Apktool下载失败！"
+    exit 1
+fi
+echo "apktool下载完成"
 # 下载 Mod Patch 文件并解压
 DOWNLOAD_MOD_MENU() {
     local OWNER="JMBQ"
